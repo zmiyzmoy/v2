@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.log
+.env
+venv/
+mongo_data/
+n8n_data/

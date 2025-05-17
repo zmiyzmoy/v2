@@ -1,0 +1,6 @@
+{
+  "greeting": "Hello, {name}!",
+  "llm_invocation_error": "An error occurred while contacting the AI. Please try again later.",
+  "llm_response_parse_error": "Error processing the response from the AI. Please try again later.",
+  "llm_empty_response": "I'm sorry, I couldn't generate a response at this time."
+}

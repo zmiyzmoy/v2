@@ -1,0 +1,140 @@
+services:
+  n8n:
+    image: n8nio/n8n:1.46.0 
+    container_name: mvp_n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=${N8N_SUBDOMAIN:-localhost}.${N8N_DOMAIN_NAME:-localhost} 
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - NODE_ENV=${NODE_ENV:-production}
+      - N8N_SECURE_COOKIE=false
+      - WEBHOOK_URL=http://${N8N_HOST:-n8n}:${N8N_PORT:-5678}/ 
+      - GENERIC_TIMEZONE=${TZ:-Europe/Moscow}
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-true}
+      - N8N_BASIC_AUTH_USER=${N8N_UI_USER:-n8nadmin} # Используем напрямую из .env
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_UI_PASSWORD}   # Используем напрямую из .env
+      # Убрали переменные для DB для n8n, так как он использует SQLite
+    volumes:
+      - ./n8n_data:/home/node/.n8n 
+    networks:
+      - app_network
+
+  evolution_api:
+    image: atendai/evolution-api:latest 
+    container_name: mvp_evolution_api
+    restart: unless-stopped
+    environment:
+      # Переменные, которые мы знаем из рабочего .env для Evolution
+      - AUTHENTICATION_API_KEY=${AUTHENTICATION_API_KEY}
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://${POSTGRES_USER_EVOLUTION}:${POSTGRES_PASSWORD_EVOLUTION}@postgres_db:5432/${POSTGRES_DB_EVOLUTION}
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://${REDIS_HOST:-redis_db}:${REDIS_PORT:-6379}
+      # Стандартные переменные, которые мы использовали ранее
+      - SERVER_PORT=${EVOLUTION_PORT:-8080} 
+      - CORS_ENABLED=true
+      - WEBHOOK_GLOBAL_URL=http://n8n:5678/webhook-test/whatsapp_incoming_mvp 
+      - WEBHOOK_MESSAGE_RECEIVED=true
+      - WEBHOOK_MESSAGE_CREATE=true
+      - WEBHOOK_CONNECTION_QRCODE=true
+    volumes:
+      - ./evolution_data:/evolution/instances 
+    depends_on:
+      - postgres_db 
+      - redis_db 
+    networks:
+      - app_network
+    ports: 
+      - "${EVOLUTION_HOST_PORT:-8081}:${EVOLUTION_PORT:-8080}"
+
+  postgres_db:
+    image: postgres:15-alpine 
+    container_name: mvp_postgres_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER_EVOLUTION}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD_EVOLUTION}
+      - POSTGRES_DB=${POSTGRES_DB_EVOLUTION}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data 
+    networks:
+      - app_network
+
+  redis_db:
+    image: redis:7-alpine 
+    container_name: mvp_redis_db
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data 
+    networks:
+      - app_network
+
+  mongodb: 
+    image: mongo:6.0 
+    container_name: mvp_mongodb
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER} # Используем testadmin из .env
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD} # Используем testpassword из .env
+    volumes:
+      - ./mongo_data:/data/db 
+    networks:
+      - app_network
+
+  ai_core_api: 
+    build:
+      context: ./ai_core_api_service 
+      dockerfile: Dockerfile.apicenter
+    container_name: mvp_ai_core_api
+    restart: unless-stopped
+    environment:
+      # --- ОБЯЗАТЕЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ AI CORE API ---
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${API_LOG_LEVEL:-INFO}
+      # --- Подключение к MongoDB ---
+      - MONGO_CONNECTION_STRING=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/?authSource=admin&directConnection=true
+      - MONGO_DATABASE_NAME=${API_MONGO_DB_NAME:-ai_agent_mvp_db}
+      - MONGO_DIALOG_HISTORY_COLLECTION=${API_MONGO_DIALOG_COLLECTION:-dialog_history_mvp}
+      # --- LLM и LangChain ---
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - DEFAULT_LLM_MODEL=${API_DEFAULT_LLM_MODEL:-deepseek/deepseek-chat}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-true}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-MVP_AI_Agent_Core} # Можно изменить на ${LANGCHAIN_PROJECT_AI_CORE} если хотите отдельную переменную в .env
+      # --- I18n ---
+      - I18N_PATH_API=/app/app/core/locales 
+      - DEFAULT_LANG_API=${API_DEFAULT_LANG:-ru}
+      # --- MVP Client Config (пока из env) ---
+      - MVP_CLIENT_ID=${API_MVP_CLIENT_ID:-salon_krasoty_mvp}
+      - MVP_CLIENT_NAME=${API_MVP_CLIENT_NAME:-Салон Красоты 'SuperStar' (MVP)}
+      - MVP_CLIENT_PERSONA=${API_MVP_CLIENT_PERSONA:-дружелюбный и профессиональный консультант}
+      - MVP_CLIENT_TONE=${API_MVP_CLIENT_TONE:-заботливый и экспертный}
+      - MVP_BUSINESS_TYPE=${API_MVP_BUSINESS_TYPE:-beauty_salon}
+      # --- Настройки FastAPI/Uvicorn ---
+      - API_HOST=0.0.0.0 
+      - API_PORT=${API_SERVICE_PORT:-8000} # Этот порт используется в settings.py и CMD Dockerfile
+      # --- Подключение к Redis (если Python API будет его использовать) ---
+      - REDIS_HOST=${REDIS_HOST:-redis_db}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      # - REDIS_PASSWORD=${REDIS_PASSWORD} # Если есть пароль
+    depends_on:
+      - mongodb 
+      - redis_db 
+    networks:
+      - app_network
+    ports: 
+      - "${API_HOST_PORT:-8000}:${API_SERVICE_PORT:-8000}" # Используем переменные для внешнего и внутреннего порта
+
+volumes: 
+  postgres_data:
+  redis_data:
+  # mysql_data: # Больше не нужен
+  # mongo_data: # Используем локальный маппинг ./mongo_data, а не именованный том здесь
+
+networks:
+  app_network:
+    driver: bridge
