@@ -1,3 +1,4 @@
+import traceback # <--- ДОБАВЛЕН ЭТОТ ИМПОРТ
 from fastapi import APIRouter, HTTPException, Depends, Request
 from loguru import logger
 from typing import List, Optional, Dict, Any
@@ -49,6 +50,17 @@ async def process_user_message(
         }
         logger.debug(f"Using client config for processing: {client_config_mvp}")
 
+        # Опциональный лог перед вызовом LLMProcessor (можете раскомментировать для детальной отладки)
+        # logger.debug(
+        #     f"Data for LLMProcessor -- "
+        #     f"User ID: {request_data.user_id}, "
+        #     f"Platform: {request_data.platform}, "
+        #     f"Text: '{request_data.text}', "
+        #     f"Session ID: {request_data.session_id}, "
+        #     f"History Length: {len(request_data.conversation_history or [])}, "
+        #     f"Metadata: {request_data.message_metadata}"
+        # )
+
         llm_processed_data = await llm_processor.process_with_llm_langchain(
             client_config=client_config_mvp,
             user_id=request_data.user_id,
@@ -59,10 +71,7 @@ async def process_user_message(
             session_id=request_data.session_id,
             message_metadata=request_data.message_metadata
         )
-        # llm_processed_data должен содержать ключи: 
-        # "response_text", "language_detected", "intent", "entities", "actions_for_n8n", "debug_info"
-        # или "error", "error_message"
-
+        
         if "error" in llm_processed_data:
             logger.error(f"Error from LLM Processor for session {request_data.session_id}: {llm_processed_data.get('error_message', 'Unknown LLM error')}")
             return ProcessMessageResponse(
@@ -94,5 +103,6 @@ async def process_user_message(
     except HTTPException: # Перехватываем HTTPException, чтобы не попасть в общий Exception ниже
         raise
     except Exception as e:
-        logger.critical(f"Critical unhandled error in /process_message for session {request_data.session_id}: {e}", exc_info=True)
+        tb_str = traceback.format_exc() # <--- ПОЛУЧЕНИЕ ПОЛНОГО TRACEBACK
+        logger.critical(f"Critical unhandled error in /process_message for session {request_data.session_id}: {e}\nTRACEBACK:\n{tb_str}") # <--- ВЫВОД TRACEBACK В ЛОГ
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

@@ -1,6 +1,6 @@
 services:
   n8n:
-    image: n8nio/n8n:1.46.0 
+    image: n8nio/n8n:latest 
     container_name: mvp_n8n
     restart: unless-stopped
     ports:
@@ -36,7 +36,7 @@ services:
       # Стандартные переменные, которые мы использовали ранее
       - SERVER_PORT=${EVOLUTION_PORT:-8080} 
       - CORS_ENABLED=true
-      - WEBHOOK_GLOBAL_URL=http://n8n:5678/webhook-test/whatsapp_incoming_mvp 
+      - WEBHOOK_GLOBAL_URL=http://n8n:5678/webhook/webhook-test/whatsapp_incoming_mvp 
       - WEBHOOK_MESSAGE_RECEIVED=true
       - WEBHOOK_MESSAGE_CREATE=true
       - WEBHOOK_CONNECTION_QRCODE=true

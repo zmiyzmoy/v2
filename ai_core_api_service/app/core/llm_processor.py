@@ -1,27 +1,26 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage as LangchainSystemMessage # Переименовал во избежание конфликта
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage as LangchainSystemMessage
 from loguru import logger
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.core.i18n import I18nLoader
-from app.core.db import save_dialog_entry, get_dialog_history # Импортируем функции БД
+from app.core.db import save_dialog_entry, get_dialog_history
 
 class LLMProcessor:
     def __init__(self, db_instance: Any, i18n_loader: I18nLoader):
-        self.db = db_instance # Экземпляр БД Motor
+        self.db = db_instance
         self.i18n = i18n_loader
-        
+
         self.llm = ChatOpenAI(
             model_name=settings.DEFAULT_LLM_MODEL,
             openai_api_key=settings.OPENROUTER_API_KEY,
             openai_api_base="https://openrouter.ai/api/v1",
             temperature=settings.LLM_TEMPERATURE,
             max_tokens=settings.LLM_MAX_TOKENS,
-            # request_timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS, # Можно добавить в config
         )
         logger.info(f"LLMProcessor initialized with model: {settings.DEFAULT_LLM_MODEL} via OpenRouter.")
         if settings.LANGCHAIN_TRACING_V2 == "true":
@@ -29,25 +28,25 @@ class LLMProcessor:
 
 
     async def _save_message_to_history(
-        self, client_id: str, user_id: str, platform: str, 
+        self, client_id: str, user_id: str, platform: str,
         content: Optional[str], role: str,
-        session_id: Optional[str] = None, 
+        session_id: Optional[str] = None,
         message_metadata: Optional[Dict[str, Any]] = None,
-        llm_full_response: Optional[Dict[str, Any]] = None 
+        llm_full_response: Optional[Dict[str, Any]] = None
     ):
-        if not self.db:
+        if self.db is None: # ИЗМЕНЕНИЕ ЗДЕСЬ
             logger.warning("Database instance not available. Skipping history save.")
             return
 
-        if not content: # Не сохраняем сообщения без контента
-             # Исключение для ответов ассистента, где контент может быть в llm_full_response
+        content_to_save = content
+        if not content:
              if role == "assistant" and llm_full_response and isinstance(llm_full_response.get("response_text"), str):
                  content_to_save = llm_full_response["response_text"]
+             elif role == "assistant" and llm_full_response and llm_full_response.get("response_text") is None:
+                 content_to_save = None
              else:
                 logger.debug(f"Skipping saving message with no content for role {role} of user {user_id}.")
                 return
-        else:
-            content_to_save = content
 
         entry_data = {
             "client_id": client_id,
@@ -55,12 +54,12 @@ class LLMProcessor:
             "platform": platform,
             "session_id_n8n": session_id,
             "role": role,
-            "content": content_to_save, # Используем обработанный content_to_save
+            "content": content_to_save,
             "timestamp": datetime.now(timezone.utc),
             "message_metadata_platform": message_metadata,
         }
         if role == "assistant" and llm_full_response:
-            entry_data["llm_full_response_payload"] = llm_full_response # Сохраняем весь ответ LLM
+            entry_data["llm_full_response_payload"] = llm_full_response
 
         await save_dialog_entry(self.db, entry_data)
 
@@ -94,17 +93,17 @@ class LLMProcessor:
             business_type=client_config.get('business_type', settings.MVP_BUSINESS_TYPE),
             tone=client_config.get('tone', settings.MVP_CLIENT_TONE),
             persona=client_config.get('persona', settings.MVP_CLIENT_PERSONA),
-            language_fallback=language # Используем язык, определенный для этого запроса
+            language_fallback=language
         ).strip()
 
     def _format_history_for_lc(self, conversation_history_db: List[Dict[str, Any]]) -> List[Any]:
         lc_messages = []
-        for msg_doc in conversation_history_db: # msg_doc это документ из MongoDB
+        for msg_doc in conversation_history_db:
             role = msg_doc.get("role")
             content = msg_doc.get("content")
-            if role == "user" and content:
+            if role == "user" and content is not None:
                 lc_messages.append(HumanMessage(content=content))
-            elif role == "assistant" and content:
+            elif role == "assistant" and content is not None:
                 lc_messages.append(AIMessage(content=content))
         return lc_messages
 
@@ -114,12 +113,12 @@ class LLMProcessor:
         user_id: str,
         platform: str,
         current_user_message: str,
-        conversation_history: List[Dict[str, Any]], # Это уже отформатированный n8n список {"role": ..., "content": ...}
+        conversation_history: List[Dict[str, Any]],
         language_preference: Optional[str] = None,
         session_id: Optional[str] = None,
         message_metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        
+
         client_id = client_config["client_id"]
 
         await self._save_message_to_history(
@@ -129,38 +128,26 @@ class LLMProcessor:
         )
 
         effective_lang = language_preference or client_config.get("default_lang") or settings.DEFAULT_LANG_API
-        
-        # Загружаем историю из БД, если n8n ее не передал или передал неполную
-        # Для MVP, n8n передает историю, отформатированную в Code ноде
-        # Если conversation_history пуст, можно загрузить из БД здесь
-        if not conversation_history and self.db:
+
+        if not conversation_history and self.db is not None: # ИЗМЕНЕНИЕ ЗДЕСЬ
             logger.debug(f"Conversation history from n8n is empty for {user_id}. Fetching from DB...")
             history_from_db_docs = await get_dialog_history(self.db, client_id, user_id, settings.HISTORY_MAX_MESSAGES)
-            # history_from_db_docs уже отсортирован (старые -> новые)
-            # Преобразуем его в формат, который ожидает _format_history_for_lc (если он отличается от ConversationHistoryItem)
-            # В нашем случае get_dialog_history уже возвращает документы с 'role' и 'content'
             formatted_lc_history = self._format_history_for_lc(history_from_db_docs)
-            logger.debug(f"Fetched {len(formatted_lc_history)} messages from DB history.")
+            logger.debug(f"Fetched {len(formatted_lc_history)} messages from DB history for LLM.")
         else:
-            # Используем историю, переданную от n8n, предполагая, что она уже в формате LangChain Messages
-            # или близка к этому (список словарей {"role": ..., "content": ...})
             formatted_lc_history = self._format_history_for_lc(conversation_history)
+            logger.debug(f"Using {len(formatted_lc_history)} messages from n8n-provided history for LLM.")
 
 
         system_prompt_str = self._construct_system_prompt_content(client_config, effective_lang)
-        
+
         prompt = ChatPromptTemplate.from_messages([
             LangchainSystemMessage(content=system_prompt_str),
             MessagesPlaceholder(variable_name="chat_history", optional=True),
             HumanMessage(content="{input}")
         ])
-        
-        # JsonOutputParser() ожидает, что LLM вернет строку, которая является валидным JSON.
-        # Если LLM сам возвращает JSON объект (некоторые модели и API это поддерживают с response_format),
-        # то JsonOutputParser может не понадобиться или нужна другая конфигурация.
-        # Для OpenAI/OpenRouter с "response_format": {"type": "json_object"} в запросе,
-        # ответ в message.content уже будет JSON строкой.
-        output_parser = JsonOutputParser() 
+
+        output_parser = JsonOutputParser()
         chain = prompt | self.llm | output_parser
 
         final_response_payload = {}
@@ -172,11 +159,19 @@ class LLMProcessor:
                 "chat_history": formatted_lc_history,
                 "input": current_user_message
             })
-            # llm_result_dict это уже распарсенный JSON (python dict)
-            
+
             if not isinstance(llm_result_dict, dict) or "response_text" not in llm_result_dict:
                 logger.error(f"LLM response is not a valid dict or missing 'response_text'. Response: {llm_result_dict}")
-                raise ValueError("Invalid LLM response format")
+                if isinstance(llm_result_dict, str):
+                    try:
+                        llm_result_dict = output_parser.parse(llm_result_dict)
+                        if "response_text" not in llm_result_dict: raise ValueError("Still no response_text")
+                    except Exception as parse_err:
+                        logger.error(f"Could not re-parse LLM string response: {parse_err}")
+                        raise ValueError("Invalid LLM response format after re-parse attempt")
+                else:
+                  raise ValueError("Invalid LLM response format")
+
 
             final_response_payload = {
                 "response_text": llm_result_dict.get("response_text", self.i18n.get("llm_empty_response", effective_lang)),
@@ -195,26 +190,22 @@ class LLMProcessor:
                 "error_message": str(e),
                 "response_text": error_text,
                 "language_detected": effective_lang,
-                "actions_for_n8n": [] # Не предлагаем действий при ошибке LLM
+                "actions_for_n8n": []
             }
-        
+
         end_time = datetime.now()
         processing_time_ms = (end_time - start_time).total_seconds() * 1000
-        
-        # Добавляем отладочную информацию
+
         final_response_payload["debug_info"] = {
             "model_used": self.llm.model_name,
             "processing_time_ms": round(processing_time_ms, 2)
-            # Токены можно получить, если LangSmith включен и вы парсите его данные,
-            # или если используете коллбэки LangChain для сбора статистики.
-            # "prompt_tokens": ..., "completion_tokens": ...
         }
 
         await self._save_message_to_history(
             client_id=client_id, user_id=user_id, platform=platform,
-            content=final_response_payload.get("response_text"), # Сохраняем только текст для пользователя
+            content=final_response_payload.get("response_text"),
             role="assistant", session_id=session_id,
-            llm_full_response=final_response_payload # Сохраняем весь структурированный ответ
+            llm_full_response=final_response_payload
         )
-        
+
         return final_response_payload

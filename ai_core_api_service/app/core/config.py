@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     API_PORT: int = 8000 # Этот порт слушает Uvicorn ВНУТРИ контейнера
     
     LLM_TEMPERATURE: float = 0.7
-    LLM_MAX_TOKENS: int = 1500 # Увеличил немного для более полных ответов
+    LLM_MAX_TOKENS: int = 100 # Увеличил немного для более полных ответов
     HISTORY_MAX_MESSAGES: int = 10
 
     class Config:

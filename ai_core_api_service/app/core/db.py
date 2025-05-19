@@ -9,7 +9,7 @@ mongo_database_instance: Optional[Any] = None # MongoDB Database object from Mot
 
 async def connect_to_mongo():
     global mongo_client_instance, mongo_database_instance
-    if mongo_client_instance and mongo_database_instance:
+    if mongo_client_instance is not None and mongo_database_instance is not None: # ИЗМЕНЕНИЕ ЗДЕСЬ (хотя здесь было правильно)
         try:
             await mongo_client_instance.admin.command('ping')
             logger.debug("MongoDB connection already active and verified.")
@@ -38,7 +38,7 @@ async def connect_to_mongo():
 
 async def close_mongo_connection():
     global mongo_client_instance, mongo_database_instance
-    if mongo_client_instance:
+    if mongo_client_instance is not None: # ИЗМЕНЕНИЕ ЗДЕСЬ
         logger.info("Closing MongoDB connection.")
         mongo_client_instance.close()
         mongo_client_instance = None
@@ -47,28 +47,25 @@ async def close_mongo_connection():
 def get_database() -> Optional[Any]: # Возвращает объект базы данных Motor
     if mongo_database_instance is None:
         logger.error("MongoDB instance (database) is not available. Connection might have failed or not been initialized.")
-        # Не пытаемся переподключиться здесь, это должно быть обработано на уровне приложения или при старте.
     return mongo_database_instance
 
 async def create_indexes(db: Any): # Принимает объект базы данных Motor
     """Создает необходимые индексы, если они еще не существуют."""
-    if db is None:
+    if db is None: # ИЗМЕНЕНИЕ ЗДЕСЬ
         logger.error("Cannot create indexes, database instance is None.")
         return
-        
+
     logger.info("Checking and creating MongoDB indexes...")
     try:
         collection_name = settings.MONGO_DIALOG_HISTORY_COLLECTION
-        # Индекс для быстрого поиска истории по клиенту и пользователю, отсортированной по времени
         await db[collection_name].create_index(
             [("client_id", 1), ("user_id", 1), ("timestamp", -1)],
             name="idx_history_client_user_time"
         )
-        # Индекс по n8n session ID для возможной трассировки
         await db[collection_name].create_index(
             [("session_id_n8n", 1)],
             name="idx_history_n8n_session",
-            sparse=True # Так как это поле может отсутствовать
+            sparse=True
         )
         logger.success(f"Indexes checked/created for collection '{collection_name}'.")
     except Exception as e:
@@ -76,7 +73,7 @@ async def create_indexes(db: Any): # Принимает объект базы д
 
 async def save_dialog_entry(db: Any, entry_data: dict):
     """Сохраняет одну запись диалога в указанную коллекцию."""
-    if not db:
+    if db is None: # ИЗМЕНЕНИЕ ЗДЕСЬ
         logger.error("Cannot save dialog entry, database instance is None.")
         return None
     try:
@@ -90,7 +87,7 @@ async def save_dialog_entry(db: Any, entry_data: dict):
 
 async def get_dialog_history(db: Any, client_id: str, user_id: str, limit: int) -> list:
     """Получает последние 'limit' сообщений для данного клиента и пользователя."""
-    if not db:
+    if db is None: # ИЗМЕНЕНИЕ ЗДЕСЬ
         logger.error("Cannot get dialog history, database instance is None.")
         return []
     try:
@@ -98,10 +95,9 @@ async def get_dialog_history(db: Any, client_id: str, user_id: str, limit: int) 
         history_cursor = db[collection_name].find(
             {"client_id": client_id, "user_id": user_id}
         ).sort("timestamp", -1).limit(limit)
-        
+
         history_docs = await history_cursor.to_list(length=limit)
-        # Документы приходят в порядке "новые сначала", переворачиваем для LLM (старые сначала)
-        return history_docs[::-1] 
+        return history_docs[::-1]
     except Exception as e:
         logger.error(f"Error fetching dialog history for client '{client_id}', user '{user_id}': {e}", exc_info=True)
         return []
