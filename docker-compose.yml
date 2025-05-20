@@ -36,7 +36,7 @@ services:
       # Стандартные переменные, которые мы использовали ранее
       - SERVER_PORT=${EVOLUTION_PORT:-8080} 
       - CORS_ENABLED=true
-      - WEBHOOK_GLOBAL_URL=http://n8n:5678/webhook/webhook-test/whatsapp_incoming_mvp 
+      - WEBHOOK_GLOBAL_URL=http://n8n:5678/webhook/general 
       - WEBHOOK_MESSAGE_RECEIVED=true
       - WEBHOOK_MESSAGE_CREATE=true
       - WEBHOOK_CONNECTION_QRCODE=true
@@ -128,6 +128,25 @@ services:
       - app_network
     ports: 
       - "${API_HOST_PORT:-8000}:${API_SERVICE_PORT:-8000}" # Используем переменные для внешнего и внутреннего порта
+
+  telegram_bot:
+    build:
+      context: ./telegram_bot_service
+      dockerfile: Dockerfile
+    container_name: mvp_telegram_bot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - WEBHOOK_URL=http://n8n:5678/webhook/general # This should point to the n8n general webhook
+      - API_HOST=0.0.0.0
+      - API_PORT=8002 # Port inside the container
+    depends_on:
+      - n8n
+      - mongodb # Though not directly used by this simple bot, n8n might need it
+    networks:
+      - app_network
+    ports:
+      - "${TELEGRAM_BOT_PORT:-8002}:8002" # Exposes port 8002 externally
 
 volumes: 
   postgres_data:

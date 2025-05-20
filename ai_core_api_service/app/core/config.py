@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     MONGO_CONNECTION_STRING: str = "mongodb://mongo_user:mongo_pass@mongodb:27017/?authSource=admin&directConnection=true"
     MONGO_DATABASE_NAME: str = "ai_agent_mvp_db"
     MONGO_DIALOG_HISTORY_COLLECTION: str = "dialog_history_mvp"
+    MONGO_CLIENTS_COLLECTION: str = "clients"
+    MONGO_PROMPTS_COLLECTION: str = "prompts"
+    MONGO_USERS_COLLECTION: str = "users"
+    MONGO_APPOINTMENTS_COLLECTION: str = "appointments"
 
     # LangChain & LLM
     OPENROUTER_API_KEY: str = "YOUR_OPENROUTER_KEY_HERE" # Будет переопределено из env

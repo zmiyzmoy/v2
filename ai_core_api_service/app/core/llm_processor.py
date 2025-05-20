@@ -63,6 +63,43 @@ class LLMProcessor:
 
         await save_dialog_entry(self.db, entry_data)
 
+    async def _load_prompt_from_db(self, business_type: str) -> str:
+        if not self.db:
+            logger.warning("Database instance not available. Using default prompt construction.")
+            # Assuming _construct_default_system_prompt_content exists or will be created
+            # For now, let's use the existing _construct_system_prompt_content
+            # but it expects client_config and language.
+            # We need a generic default or adapt _construct_system_prompt_content.
+            # For this subtask, if DB is not available, we will fall back to a generic default prompt string.
+            # Or, ideally, it should call the original _construct_system_prompt_content
+            # with some default client_config. Let's try that.
+            # This part might need refinement based on how _construct_system_prompt_content is structured.
+            # The issue implies _construct_default_system_prompt_content() which is not currently in the file.
+            # Let's use the existing _construct_system_prompt_content with a dummy client_config for default.
+            logger.warning("Falling back to default prompt construction due to missing DB or prompt.")
+            dummy_client_config = { # Provide a minimal config for the default prompt
+                "name": settings.MVP_CLIENT_NAME,
+                "business_type": business_type, # Use the passed business_type
+                "tone": settings.MVP_CLIENT_TONE,
+                "persona": settings.MVP_CLIENT_PERSONA
+            }
+            # Assuming default language from settings for this fallback
+            return self._construct_system_prompt_content(dummy_client_config, settings.DEFAULT_LANG_API)
+
+        prompt_doc = await self.db[settings.MONGO_PROMPTS_COLLECTION].find_one({"business_type": business_type})
+        if not prompt_doc or "prompt" not in prompt_doc:
+            logger.warning(f"Prompt for business_type '{business_type}' not found in DB. Using default prompt construction.")
+            # Fallback to the original method if specific prompt not found
+            dummy_client_config = {
+                "name": settings.MVP_CLIENT_NAME, # Or load from a general client config if available
+                "business_type": business_type,
+                "tone": settings.MVP_CLIENT_TONE,
+                "persona": settings.MVP_CLIENT_PERSONA
+            }
+            return self._construct_system_prompt_content(dummy_client_config, settings.DEFAULT_LANG_API)
+        
+        logger.info(f"Successfully loaded prompt for business_type '{business_type}' from DB.")
+        return prompt_doc["prompt"]
 
     def _construct_system_prompt_content(self, client_config: Dict[str, Any], language: str) -> str:
         system_template = """Ты - AI-ассистент для бизнеса "{business_name}" (тип: {business_type}).
@@ -120,6 +157,8 @@ class LLMProcessor:
     ) -> Dict[str, Any]:
 
         client_id = client_config["client_id"]
+        business_type = client_config.get("business_type", settings.MVP_BUSINESS_TYPE)
+        logger.info(f"Processing message for client_id: {client_id}, business_type: {business_type}, platform: {platform}, user_id: {user_id}, session_id: {session_id}")
 
         await self._save_message_to_history(
             client_id=client_id, user_id=user_id, platform=platform,
@@ -138,8 +177,8 @@ class LLMProcessor:
             formatted_lc_history = self._format_history_for_lc(conversation_history)
             logger.debug(f"Using {len(formatted_lc_history)} messages from n8n-provided history for LLM.")
 
-
-        system_prompt_str = self._construct_system_prompt_content(client_config, effective_lang)
+        business_type = client_config.get("business_type", settings.MVP_BUSINESS_TYPE) # Get business_type from client_config
+        system_prompt_str = await self._load_prompt_from_db(business_type)
 
         prompt = ChatPromptTemplate.from_messages([
             LangchainSystemMessage(content=system_prompt_str),

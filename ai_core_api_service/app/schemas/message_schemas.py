@@ -6,16 +6,17 @@ class ConversationHistoryItem(BaseModel):
     role: str = Field(..., description="Role of the message sender, e.g., 'user' or 'assistant'")
     content: str = Field(..., description="Content of the message")
 
-class ProcessMessageRequest(BaseModel):
+class ProcessRequest(BaseModel): # Renamed from ProcessMessageRequest
+    client_id: str = Field(..., description="Identifier for the client/tenant this agent is serving") # Made non-optional
+    business_type: Optional[str] = Field(None, description="Type of business for client configuration")
     user_id: str = Field(..., description="Unique identifier for the user, prefixed by platform (e.g., whatsapp:12345)")
     platform: str = Field(..., description="Platform of the message (e.g., whatsapp, instagram)")
-    text: str = Field(..., description="The user's message text")
-    client_id: Optional[str] = Field(None, description="Identifier for the client/tenant this agent is serving")
-    language_preference: Optional[str] = Field(None, description="User's preferred language (ISO 639-1 code, e.g., ru, en)")
+    message: str = Field(..., description="The user's message text") # Renamed from text
+    conversation_history: Optional[List[Dict[str, Any]]] = Field(None, description="Recent conversation history as list of dicts") # Changed type
+    language: Optional[str] = Field(None, description="User's preferred language (ISO 639-1 code, e.g., ru, en)") # Renamed from language_preference
     session_id: Optional[str] = Field(None, description="Session ID from n8n for tracing or context linking")
     message_metadata: Optional[Dict[str, Any]] = Field(None, description="Original message metadata from the platform (e.g., message_id, timestamp)")
-    conversation_history: Optional[List[ConversationHistoryItem]] = Field(None, description="Recent conversation history")
-    current_fsm_data: Optional[Dict[str, Any]] = Field(None, description="Current FSM data if FSM is managed by n8n (for MVP, likely null)")
+    # current_fsm_data removed as it's not in the target schema
 
 # --- Модели для ответа от /process_message ---
 class ActionForN8N(BaseModel):
@@ -41,7 +42,7 @@ class DebugInfo(BaseModel):
     # completion_tokens: Optional[int] = None
     # cost: Optional[float] = None
 
-class ProcessMessageResponse(BaseModel):
+class ProcessResponse(BaseModel): # Renamed from ProcessMessageResponse
     request_id: str = Field(..., description="ID linking to the n8n session or original request for tracing")
     status: str = Field(..., description="Status of the processing ('success' or 'error')")
     data: Optional[AICoreResponseData] = None
