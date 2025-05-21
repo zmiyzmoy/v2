@@ -104,7 +104,7 @@ services:
       - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
       - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-true}
       - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
-      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-MVP_AI_Agent_Core} # Можно изменить на ${LANGCHAIN_PROJECT_AI_CORE} если хотите отдельную переменную в .env
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-MVP_AI_Agent_Core}
       # --- I18n ---
       - I18N_PATH_API=/app/app/core/locales 
       - DEFAULT_LANG_API=${API_DEFAULT_LANG:-ru}
@@ -114,9 +114,12 @@ services:
       - MVP_CLIENT_PERSONA=${API_MVP_CLIENT_PERSONA:-дружелюбный и профессиональный консультант}
       - MVP_CLIENT_TONE=${API_MVP_CLIENT_TONE:-заботливый и экспертный}
       - MVP_BUSINESS_TYPE=${API_MVP_BUSINESS_TYPE:-beauty_salon}
+      # --- Default Fallback Values ---
+      - DEFAULT_FALLBACK_CLIENT_ID=${DEFAULT_FALLBACK_CLIENT_ID:-system_default_client}
+      - DEFAULT_FALLBACK_BUSINESS_TYPE=${DEFAULT_FALLBACK_BUSINESS_TYPE:-general_default}
       # --- Настройки FastAPI/Uvicorn ---
       - API_HOST=0.0.0.0 
-      - API_PORT=${API_SERVICE_PORT:-8000} # Этот порт используется в settings.py и CMD Dockerfile
+      - API_PORT=${API_SERVICE_PORT:-8000}
       # --- Подключение к Redis (если Python API будет его использовать) ---
       - REDIS_HOST=${REDIS_HOST:-redis_db}
       - REDIS_PORT=${REDIS_PORT:-6379}
@@ -127,7 +130,7 @@ services:
     networks:
       - app_network
     ports: 
-      - "${API_HOST_PORT:-8000}:${API_SERVICE_PORT:-8000}" # Используем переменные для внешнего и внутреннего порта
+      - "${API_HOST_PORT:-8000}:${API_SERVICE_PORT:-8000}"
 
   telegram_bot:
     build:
