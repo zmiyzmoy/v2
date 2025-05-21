@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     MONGO_USERS_COLLECTION: str = "users"
     MONGO_APPOINTMENTS_COLLECTION: str = "appointments"
 
+    # Default Fallback Values
+    DEFAULT_FALLBACK_CLIENT_ID: str = "system_default_client"
+    DEFAULT_FALLBACK_BUSINESS_TYPE: str = "general_default"
+
     # LangChain & LLM
     OPENROUTER_API_KEY: str = "YOUR_OPENROUTER_KEY_HERE" # Будет переопределено из env
     DEFAULT_LLM_MODEL: str = "deepseek/deepseek-chat"

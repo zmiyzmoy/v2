@@ -46,66 +46,78 @@ async def process_message(  # MODIFIED: Function name
 
     try:
         client_config_for_llm = None
-        # client_id is now non-optional in ProcessRequest.
-        client_config_db = await db[settings.MONGO_CLIENTS_COLLECTION].find_one({"client_id": request_data.client_id})
-        
-        if client_config_db:
-            logger.info(f"Found client configuration in DB for client_id: {request_data.client_id}")
-            client_config_for_llm = {
-                "client_id": client_config_db.get("client_id", request_data.client_id), 
-                "name": client_config_db.get("name", settings.MVP_CLIENT_NAME),
-                "persona": client_config_db.get("persona", settings.MVP_CLIENT_PERSONA),
-                "tone": client_config_db.get("tone", settings.MVP_CLIENT_TONE),
-                # MODIFIED: Prioritize request_data.business_type, then DB, then settings
-                "business_type": request_data.business_type or client_config_db.get("business_type", settings.MVP_BUSINESS_TYPE),
-                # MODIFIED: Prioritize request_data.language, then DB, then settings
-                "default_lang": request_data.language or client_config_db.get("default_lang", settings.DEFAULT_LANG_API),
-                "llm_model": client_config_db.get("llm_model", settings.DEFAULT_LLM_MODEL),
-                "history_max_messages": client_config_db.get("history_max_messages", settings.HISTORY_MAX_MESSAGES)
-            }
+        source_of_config = "hardcoded_mvp" # Источник конфигурации
+
+        if db is not None: # Только если БД доступна
+            # Сначала пытаемся найти конфиг по client_id из запроса
+            if request_data.client_id:
+                client_config_db = await db[settings.MONGO_CLIENTS_COLLECTION].find_one({"client_id": request_data.client_id})
+                if client_config_db:
+                    source_of_config = f"db_client:{request_data.client_id}"
+                    client_config_for_llm = client_config_db
+            
+            # Если не нашли, пытаемся загрузить дефолтный конфиг
+            if not client_config_for_llm:
+                logger.warning(f"Client config for client_id '{request_data.client_id}' not found. Attempting fallback: '{settings.DEFAULT_FALLBACK_CLIENT_ID}'.")
+                client_config_db = await db[settings.MONGO_CLIENTS_COLLECTION].find_one({"client_id": settings.DEFAULT_FALLBACK_CLIENT_ID})
+                if client_config_db:
+                    source_of_config = f"db_fallback_client:{settings.DEFAULT_FALLBACK_CLIENT_ID}"
+                    client_config_for_llm = client_config_db
+                else:
+                    logger.warning(f"Fallback client config '{settings.DEFAULT_FALLBACK_CLIENT_ID}' also not found in DB.")
         else:
-            # This block executes if client_config_db is not found. client_id is always available from request_data.
-            logger.info(f"No client configuration found in DB for client_id: {request_data.client_id}. Using defaults from request and settings.")
+            logger.warning("Database instance is None. Cannot load client configurations from DB.")
+
+        # Если не нашли конфиг нигде, используем MVP настройки
+        if not client_config_for_llm:
+            logger.info(f"Using hardcoded MVP settings as client_config. Source: {source_of_config}")
             client_config_for_llm = {
-                "client_id": request_data.client_id, # MODIFIED: Directly from request_data as it's mandatory
+                "client_id": settings.MVP_CLIENT_ID,
                 "name": settings.MVP_CLIENT_NAME,
                 "persona": settings.MVP_CLIENT_PERSONA,
                 "tone": settings.MVP_CLIENT_TONE,
-                # MODIFIED: Prioritize request_data.business_type then settings
-                "business_type": request_data.business_type or settings.MVP_BUSINESS_TYPE,
-                # MODIFIED: Prioritize request_data.language then settings
-                "default_lang": request_data.language or settings.DEFAULT_LANG_API,
-                "llm_model": settings.DEFAULT_LLM_MODEL,
+                "business_type": settings.MVP_BUSINESS_TYPE,
+                "default_lang": settings.DEFAULT_LANG_API,
                 "history_max_messages": settings.HISTORY_MAX_MESSAGES
             }
-        
-        logger.debug(f"Using client config for processing: {client_config_for_llm}")
 
-        # Optional log (can be uncommented for detailed debugging)
-        # logger.debug(
-        #     f"Data for LLMProcessor -- "
-        #     f"User ID: {request_data.user_id}, "
-        #     f"Platform: {request_data.platform}, "
-        #     f"Message: '{request_data.message}', "  # MODIFIED: request_data.message
-        #     f"Session ID: {request_data.session_id}, "
-        #     f"History Length: {len(request_data.conversation_history or [])}, "
-        #     f"Metadata: {request_data.message_metadata}"
-        # )
+        # Определяем business_type для загрузки промпта
+        effective_business_type: str
+        if request_data.business_type:
+            effective_business_type = request_data.business_type
+            logger.info(f"Using business_type from request: {effective_business_type}")
+        elif "business_type" in client_config_for_llm and client_config_for_llm["business_type"]:
+            effective_business_type = client_config_for_llm["business_type"]
+            logger.info(f"Using business_type from loaded client_config ('{client_config_for_llm['client_id']}'): {effective_business_type}")
+        else:
+            effective_business_type = settings.DEFAULT_FALLBACK_BUSINESS_TYPE
+            logger.info(f"Using DEFAULT_FALLBACK_BUSINESS_TYPE: {effective_business_type}")
+        
+        client_config_for_llm["business_type"] = effective_business_type
+
+        # Дозаполняем остальными MVP значениями, если их нет в client_config_for_llm
+        client_config_for_llm.setdefault("name", settings.MVP_CLIENT_NAME)
+        client_config_for_llm.setdefault("persona", settings.MVP_CLIENT_PERSONA)
+        client_config_for_llm.setdefault("tone", settings.MVP_CLIENT_TONE)
+        client_config_for_llm.setdefault("default_lang", settings.DEFAULT_LANG_API)
+        client_config_for_llm.setdefault("history_max_messages", settings.HISTORY_MAX_MESSAGES)
+        
+        logger.debug(f"Final client_config for LLMProcessor (client_id: '{client_config_for_llm['client_id']}', business_type: '{client_config_for_llm['business_type']}'): {client_config_for_llm}")
 
         llm_processed_data = await llm_processor.process_with_llm_langchain(
             client_config=client_config_for_llm,
             user_id=request_data.user_id,
             platform=request_data.platform,
-            current_user_message=request_data.message, # MODIFIED: request_data.message
+            current_user_message=request_data.message,
             conversation_history=request_data.conversation_history or [],
-            language_preference=request_data.language, # MODIFIED: request_data.language
+            language_preference=request_data.language,
             session_id=request_data.session_id,
             message_metadata=request_data.message_metadata
         )
         
         if "error" in llm_processed_data:
             logger.error(f"Error from LLM Processor for session {request_data.session_id}: {llm_processed_data.get('error_message', 'Unknown LLM error')}")
-            return ProcessResponse( # MODIFIED: Class name
+            return ProcessResponse(
                 request_id=request_data.session_id or "unknown_session",
                 status="error",
                 error_details=ErrorDetails(
@@ -124,7 +136,7 @@ async def process_message(  # MODIFIED: Function name
         
         debug_payload = llm_processed_data.get("debug_info") if isinstance(llm_processed_data.get("debug_info"), dict) else {}
 
-        return ProcessResponse( # MODIFIED: Class name
+        return ProcessResponse(
             request_id=request_data.session_id or "unknown_session",
             status="success",
             data=response_data,
@@ -135,7 +147,7 @@ async def process_message(  # MODIFIED: Function name
         raise
     except Exception as e:
         tb_str = traceback.format_exc() 
-        logger.critical(f"Critical unhandled error in /api/v1/process for session {request_data.session_id}: {e}\nTRACEBACK:\n{tb_str}") # MODIFIED: Log message path
+        logger.critical(f"Critical unhandled error in /api/v1/process for session {request_data.session_id}: {e}\nTRACEBACK:\n{tb_str}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

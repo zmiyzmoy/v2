@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from contextlib import asynccontextmanager # Для lifespan в FastAPI
 
@@ -7,6 +8,7 @@ from app.api.endpoints import router as api_router
 from app.core.config import settings, setup_logging_api
 from app.core.db import connect_to_mongo, close_mongo_connection, get_database
 from app.core.i18n import I18nLoader
+from app.core.init_mongodb import init_mongodb
 
 # Контекстный менеджер для событий startup и shutdown
 @asynccontextmanager
@@ -31,6 +33,14 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("LangSmith tracing is DISABLED or API key/project not provided in settings.")
     
+    # Инициализируем MongoDB с дефолтными данными
+    try:
+        await init_mongodb()
+        logger.info("MongoDB initialized with default data")
+    except Exception as e:
+        logger.error(f"Failed to initialize MongoDB: {e}")
+        # Не прерываем запуск приложения, но логируем ошибку
+    
     yield # Точка, где приложение готово принимать запросы
 
     # Код, выполняемый при остановке приложения
@@ -42,7 +52,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.PROJECT_NAME_API,
     version=settings.API_VERSION,
-    lifespan=lifespan 
+    lifespan=lifespan,
+    openapi_url=f"{settings.API_V1_STR}/openapi.json"
+)
+
+# Настройка CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # В продакшене заменить на конкретные домены
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Подключение роутера с API эндпоинтами
@@ -72,6 +92,28 @@ async def health_check():
             "langsmith_tracing_enabled": settings.LANGCHAIN_TRACING_V2 == "true"
         }
     }
+
+@app.on_event("startup")
+async def startup_event():
+    # Настраиваем логирование
+    setup_logging_api()
+    logger.info(f"Starting {settings.PROJECT_NAME_API} v{settings.API_VERSION}")
+    
+    # Инициализируем i18n
+    app.state.i18n_loader = I18nLoader(settings.I18N_PATH_API)
+    logger.info(f"I18n initialized with path: {settings.I18N_PATH_API}")
+    
+    # Инициализируем MongoDB с дефолтными данными
+    try:
+        await init_mongodb()
+        logger.info("MongoDB initialized with default data")
+    except Exception as e:
+        logger.error(f"Failed to initialize MongoDB: {e}")
+        # Не прерываем запуск приложения, но логируем ошибку
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info(f"Shutting down {settings.PROJECT_NAME_API}")
 
 # Это для локального запуска без Uvicorn CLI, обычно не используется при запуске в Docker
 # if __name__ == "__main__":

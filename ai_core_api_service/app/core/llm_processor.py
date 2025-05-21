@@ -63,70 +63,49 @@ class LLMProcessor:
 
         await save_dialog_entry(self.db, entry_data)
 
-    async def _load_prompt_from_db(self, business_type: str) -> str:
-        if not self.db:
-            logger.warning("Database instance not available. Using default prompt construction.")
-            # Assuming _construct_default_system_prompt_content exists or will be created
-            # For now, let's use the existing _construct_system_prompt_content
-            # but it expects client_config and language.
-            # We need a generic default or adapt _construct_system_prompt_content.
-            # For this subtask, if DB is not available, we will fall back to a generic default prompt string.
-            # Or, ideally, it should call the original _construct_system_prompt_content
-            # with some default client_config. Let's try that.
-            # This part might need refinement based on how _construct_system_prompt_content is structured.
-            # The issue implies _construct_default_system_prompt_content() which is not currently in the file.
-            # Let's use the existing _construct_system_prompt_content with a dummy client_config for default.
-            logger.warning("Falling back to default prompt construction due to missing DB or prompt.")
-            dummy_client_config = { # Provide a minimal config for the default prompt
-                "name": settings.MVP_CLIENT_NAME,
-                "business_type": business_type, # Use the passed business_type
-                "tone": settings.MVP_CLIENT_TONE,
-                "persona": settings.MVP_CLIENT_PERSONA
-            }
-            # Assuming default language from settings for this fallback
-            return self._construct_system_prompt_content(dummy_client_config, settings.DEFAULT_LANG_API)
-
-        prompt_doc = await self.db[settings.MONGO_PROMPTS_COLLECTION].find_one({"business_type": business_type})
-        if not prompt_doc or "prompt" not in prompt_doc:
-            logger.warning(f"Prompt for business_type '{business_type}' not found in DB. Using default prompt construction.")
-            # Fallback to the original method if specific prompt not found
-            dummy_client_config = {
-                "name": settings.MVP_CLIENT_NAME, # Or load from a general client config if available
-                "business_type": business_type,
-                "tone": settings.MVP_CLIENT_TONE,
-                "persona": settings.MVP_CLIENT_PERSONA
-            }
-            return self._construct_system_prompt_content(dummy_client_config, settings.DEFAULT_LANG_API)
+    async def _load_prompt_from_db(self, business_type: str, client_config_for_formatting: Dict[str, Any], language_fallback: str) -> str:
+        if self.db is None:
+            logger.warning("DB instance is None. Using default system prompt content.")
+            return self._construct_default_system_prompt_content(client_config_for_formatting, language_fallback)
         
-        logger.info(f"Successfully loaded prompt for business_type '{business_type}' from DB.")
-        return prompt_doc["prompt"]
+        prompt_doc = await self.db[settings.MONGO_PROMPTS_COLLECTION].find_one({"business_type": business_type})
+        
+        if not prompt_doc or "prompt" not in prompt_doc:
+            logger.warning(f"Prompt for business_type '{business_type}' not found in DB. Using default system prompt.")
+            return self._construct_default_system_prompt_content(client_config_for_formatting, language_fallback)
+        
+        try:
+            formatting_args = {
+                **client_config_for_formatting, 
+                "language_fallback": language_fallback,
+            }
+            return prompt_doc["prompt"].format(**formatting_args)
+        except KeyError as e:
+            logger.error(f"KeyError during prompt formatting for business_type '{business_type}': {e}. Prompt: '{prompt_doc['prompt']}'. Args: {formatting_args}")
+            return self._construct_default_system_prompt_content(client_config_for_formatting, language_fallback)
+        except Exception as e:
+            logger.error(f"Unexpected error during prompt formatting for business_type '{business_type}': {e}. Using default.")
+            return self._construct_default_system_prompt_content(client_config_for_formatting, language_fallback)
 
-    def _construct_system_prompt_content(self, client_config: Dict[str, Any], language: str) -> str:
-        system_template = """Ты - AI-ассистент для бизнеса "{business_name}" (тип: {business_type}).
+    def _construct_default_system_prompt_content(self, client_config: Dict[str, Any], language: str) -> str:
+        system_template = """Ты - AI-ассистент для бизнеса "{name}" (тип: {business_type}).
 Твоя задача: внимательно проанализировать текущий запрос пользователя и историю диалога.
-1. Понять намерение пользователя (например, запрос информации, бронирование, жалоба).
-2. Извлечь ключевые сущности из запроса (например, название услуги, дата, время, имя).
+1. Понять намерение пользователя.
+2. Извлечь ключевые сущности.
 3. Определить, какие действия должна предпринять система n8n (если нужны).
-4. Сгенерировать максимально полезный, дружелюбный и вовлекающий ответ пользователю.
+4. Сгенерировать полезный, дружелюбный и вовлекающий ответ.
 Ты должен общаться в тоне '{tone}' и от лица '{persona}'.
-Всегда отвечай на языке, который ты определил как язык пользователя. Если сомневаешься, используй '{language_fallback}'.
+Всегда отвечай на языке: {language_fallback}.
 
 Твой ответ ДОЛЖЕН БЫТЬ в формате JSON объекта со следующими обязательными ключами:
 "response_text": (string) Твой естественный ответ пользователю.
-"language_detected": (string) ISO 639-1 код определенного тобой языка пользователя (например, "ru", "en", "az").
-"intent": (string|null) Краткая метка намерения пользователя (например, "greeting", "product_inquiry", "booking_request", "complaint", "other"). Если не уверен, ставь null.
-"entities": (object|null) JSON объект извлеченных сущностей в формате ключ-значение (например, {{"service": "маникюр", "date": "завтра"}}). Если нет сущностей, ставь null.
-"actions_for_n8n": (array) Список объектов действий для системы n8n. Каждое действие: {{"type": "имя_действия", "params": {{...}}}}. Если действий не требуется, верни пустой массив [].
-
-Пример actions_for_n8n:
-- Запрос информации о ценах: [{{"type": "get_price_list", "params": {{"service_category": "haircut"}}}}]
-- Запись на услугу: [{{"type": "create_booking_lead", "params": {{"service": "маникюр", "client_name": "Анна", "phone": "...", "datetime": "2025-05-20T14:00:00"}}}}]
-- Перевод на оператора: [{{"type": "escalate_to_human", "params": {{"reason": "сложный вопрос"}}}}]
-
-Убедись, что JSON валиден.
-"""
+"language_detected": (string) ISO 639-1 код определенного тобой языка пользователя.
+"intent": (string|null) "general_query".
+"entities": (object|null) null.
+"actions_for_n8n": (array) [].
+Убедись, что JSON валиден."""
         return system_template.format(
-            business_name=client_config.get('name', settings.MVP_CLIENT_NAME),
+            name=client_config.get('name', settings.MVP_CLIENT_NAME),
             business_type=client_config.get('business_type', settings.MVP_BUSINESS_TYPE),
             tone=client_config.get('tone', settings.MVP_CLIENT_TONE),
             persona=client_config.get('persona', settings.MVP_CLIENT_PERSONA),
@@ -178,7 +157,7 @@ class LLMProcessor:
             logger.debug(f"Using {len(formatted_lc_history)} messages from n8n-provided history for LLM.")
 
         business_type = client_config.get("business_type", settings.MVP_BUSINESS_TYPE) # Get business_type from client_config
-        system_prompt_str = await self._load_prompt_from_db(business_type)
+        system_prompt_str = await self._load_prompt_from_db(business_type, client_config, effective_lang)
 
         prompt = ChatPromptTemplate.from_messages([
             LangchainSystemMessage(content=system_prompt_str),
