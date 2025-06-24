@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: mvp_mongodb_minimal
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD}
+    volumes:
+      - ./mongo_data_minimal:/data/db
+    networks:
+      - app_network_minimal
+
+  ai_core_api:
+    build:
+      context: ./ai_core_api_service
+      dockerfile: Dockerfile.apicenter
+    container_name: mvp_ai_core_api_minimal
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${API_LOG_LEVEL:-INFO}
+      - MONGO_CONNECTION_STRING=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/?authSource=admin&directConnection=true
+      - MONGO_DATABASE_NAME=${API_MONGO_DB_NAME:-ai_agent_mvp_db}
+      - MONGO_DIALOG_HISTORY_COLLECTION=${API_MONGO_DIALOG_COLLECTION:-dialog_history_mvp}
+
+      # Ключи для LLM
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - GOOGLE_GEMINI_API_KEY=${GOOGLE_GEMINI_API_KEY}
+      # - OPENAI_API_KEY=${OPENAI_API_KEY} # Если будете использовать прямой OpenAI
+      - DEFAULT_LLM_PROVIDER=${DEFAULT_LLM_PROVIDER:-openrouter}
+      - DEFAULT_LLM_MODEL=${API_DEFAULT_LLM_MODEL:-deepseek/deepseek-chat}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.7}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-1500}
+      - HISTORY_MAX_MESSAGES=${HISTORY_MAX_MESSAGES:-10}
+
+      # Настройки для Админки
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-supersecretadminpassword}
+      - ADMIN_APP_SECRET_KEY=${ADMIN_APP_SECRET_KEY:-a_very_strong_random_secret_for_admin_sessions_please_change_me}
+
+      # Настройки MVP клиента по умолчанию
+      - API_MVP_CLIENT_ID=${API_MVP_CLIENT_ID:-default_mvp_client}
+      - API_MVP_CLIENT_NAME=${API_MVP_CLIENT_NAME:-Default MVP Client (Fallback)}
+      - API_MVP_CLIENT_PERSONA=${API_MVP_CLIENT_PERSONA:-полезный AI ассистент}
+      - API_MVP_CLIENT_TONE=${API_MVP_CLIENT_TONE:-нейтральный и дружелюбный}
+      - API_MVP_BUSINESS_TYPE=${API_MVP_BUSINESS_TYPE:-general services}
+      - API_DEFAULT_LANG=${API_DEFAULT_LANG:-ru}
+      - API_SERVICE_PORT=${API_SERVICE_PORT:-8000}
+
+      # Настройки LangSmith (опционально)
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-true}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-MVP_AI_Agent_Minimal}
+
+      - I18N_PATH_API=/app/app/core/locales
+      - API_HOST=0.0.0.0
+
+    depends_on:
+      - mongodb
+    networks:
+      - app_network_minimal
+    ports:
+      - "8000:8000"
+
+volumes:
+  mongo_data_minimal:
+
+networks:
+  app_network_minimal:
+    driver: bridge
