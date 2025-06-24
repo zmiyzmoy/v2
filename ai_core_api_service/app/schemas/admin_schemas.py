@@ -6,8 +6,8 @@ from datetime import datetime
 from app.core.config import settings
 
 class LLMConfigSchema(BaseModel):
-    provider: str = Field(default="openrouter", description="LLM provider (e.g., 'openrouter', 'openai')")
-    model_name: str = Field(default=settings.DEFAULT_LLM_MODEL, description="Name of the LLM model")
+    provider: str = Field(default=settings.DEFAULT_LLM_PROVIDER, description="LLM provider key (e.g., 'openrouter', 'gemini', 'openai')")
+    model_name: str = Field(default=settings.DEFAULT_LLM_MODEL, description="Name of the LLM model, specific to the provider")
     # API key is sensitive, should not be part of response schemas directly.
     # It will be handled in the Beanie Document model (e.g., write-only or specific projection)
     # For input during create/update, it can be accepted.

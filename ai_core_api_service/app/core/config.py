@@ -23,8 +23,11 @@ class Settings(BaseSettings):
     MONGO_DIALOG_HISTORY_COLLECTION: str = "dialog_history_mvp"
 
     # LangChain & LLM
-    OPENROUTER_API_KEY: str = "YOUR_OPENROUTER_KEY_HERE" # Будет переопределено из env
-    DEFAULT_LLM_MODEL: str = "deepseek/deepseek-chat"
+    OPENROUTER_API_KEY: Optional[str] = "YOUR_OPENROUTER_KEY_HERE" # Ключ для OpenRouter (может быть None, если не используется)
+    GOOGLE_GEMINI_API_KEY: Optional[str] = None # Ключ для Google Gemini (может быть None, если не используется)
+
+    DEFAULT_LLM_PROVIDER: str = "openrouter" # Провайдер LLM по умолчанию для MVP/fallback ("openrouter", "gemini", "openai")
+    DEFAULT_LLM_MODEL: str = "deepseek/deepseek-chat" # Модель LLM по умолчанию (должна соответствовать DEFAULT_LLM_PROVIDER)
     
     # LangSmith (опционально, но рекомендуется)
     LANGCHAIN_API_KEY: Optional[str] = None
@@ -95,29 +98,34 @@ async def load_client_config(client_id: Optional[str], request_lang: Optional[st
 
     # Prepare MVP default config first
     # This will be used as a fallback or base.
+    default_llm_provider = settings.DEFAULT_LLM_PROVIDER
+    default_api_key = None
+    if default_llm_provider == "openrouter":
+        default_api_key = settings.OPENROUTER_API_KEY
+    elif default_llm_provider == "gemini":
+        default_api_key = settings.GOOGLE_GEMINI_API_KEY
+    # Add other providers here if needed for MVP default
+
     mvp_config = {
-        "client_id": settings.MVP_CLIENT_ID,
+        "client_id": settings.MVP_CLIENT_ID, # Default client_id for MVP
         "name": settings.MVP_CLIENT_NAME,
         "persona": settings.MVP_CLIENT_PERSONA,
         "tone": settings.MVP_CLIENT_TONE,
         "business_type": settings.MVP_BUSINESS_TYPE,
-        "default_lang": request_lang or settings.DEFAULT_LANG_API, # Prioritize request_lang for MVP too
-        "llm_model": settings.DEFAULT_LLM_MODEL, # This comes from llm_config in DB model
+        "default_lang": request_lang or settings.DEFAULT_LANG_API,
         "history_max_messages": settings.HISTORY_MAX_MESSAGES,
-        # LLM specific settings like api_key, temperature, max_tokens will come from llm_config
-        # For MVP, they are implicitly defined by global settings if not overridden
-        "llm_config_provider": "openrouter", # Default provider for MVP
-        "llm_config_api_key": settings.OPENROUTER_API_KEY, # Default API key for MVP
+
+        "llm_config_provider": default_llm_provider,
+        "llm_model": settings.DEFAULT_LLM_MODEL, # Ensure this model is compatible with default_llm_provider
+        "llm_config_api_key": default_api_key,
         "llm_config_temperature": settings.LLM_TEMPERATURE,
         "llm_config_max_tokens": settings.LLM_MAX_TOKENS,
-        "llm_config_custom_prompt_prefix": None,
+        "llm_config_custom_prompt_prefix": None, # No custom prefix for MVP default
     }
 
     if not client_id:
-        logger.warning("No client_id provided, using MVP default configuration.")
-        # Ensure client_id in the returned config reflects the one being used (MVP's)
-        mvp_config["client_id"] = settings.MVP_CLIENT_ID
-        return mvp_config
+        logger.warning(f"No client_id provided, using MVP default configuration with provider: {default_llm_provider}.")
+        return mvp_config # mvp_config already has MVP_CLIENT_ID set as its "client_id"
 
     try:
         client_doc = await ClientConfiguration.find_one(

@@ -1,4 +1,5 @@
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI # ADDED for Gemini
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.pydantic_v1 import BaseModel, Field
@@ -163,21 +164,76 @@ class LLMProcessor:
         ])
 
         # Initialize LLM client with client-specific configuration
-        # Determine API base and key based on provider
-        # For now, hardcoding OpenRouter base. This could be part of llm_config_provider logic.
-        # A more robust solution would map provider names to base URLs.
-        openai_api_base = "https://openrouter.ai/api/v1"
-        if client_config.get("llm_config_provider") == "openai":
-            openai_api_base = None # Use default OpenAI base
+        llm_provider = client_config.get("llm_config_provider", settings.DEFAULT_LLM_PROVIDER).lower()
+        llm_model_name = client_config.get("llm_model", settings.DEFAULT_LLM_MODEL)
+        llm_api_key = client_config.get("llm_config_api_key") # Client specific key
+        llm_temperature = client_config.get("llm_config_temperature", settings.LLM_TEMPERATURE)
+        llm_max_tokens = client_config.get("llm_config_max_tokens", settings.LLM_MAX_TOKENS)
 
-        llm_client = ChatOpenAI(
-            model_name=client_config.get("llm_model", settings.DEFAULT_LLM_MODEL),
-            openai_api_key=client_config.get("llm_config_api_key", settings.OPENROUTER_API_KEY), # Fallback to global default if not in client_config
-            openai_api_base=openai_api_base,
-            temperature=client_config.get("llm_config_temperature", settings.LLM_TEMPERATURE),
-            max_tokens=client_config.get("llm_config_max_tokens", settings.LLM_MAX_TOKENS),
-        )
-        logger.debug(f"LLM client configured for request: model={llm_client.model_name}, temp={llm_client.temperature}, provider={client_config.get('llm_config_provider')}")
+        llm_client: Any = None # Initialize with Any to satisfy type checker for now
+
+        if llm_provider == "gemini":
+            if not llm_api_key: # Fallback to global Gemini key if client has no specific key
+                llm_api_key = settings.GOOGLE_GEMINI_API_KEY
+            if not llm_api_key:
+                logger.error(f"Gemini API key not found for client '{client_id}' and no global GOOGLE_GEMINI_API_KEY set.")
+                raise ValueError(f"Gemini API key is required for provider 'gemini'.")
+
+            llm_client = ChatGoogleGenerativeAI(
+                model=llm_model_name,
+                google_api_key=llm_api_key,
+                temperature=llm_temperature
+                # max_tokens is not a direct param for ChatGoogleGenerativeAI constructor,
+                # it's usually handled via generation_config or specific call params.
+                # For now, we'll rely on model defaults or later explore generation_config.
+                # convert_system_message_to_human=True # Might be needed depending on Gemini model version and Langchain adapter
+            )
+            logger.debug(f"Using Gemini LLM client: model={llm_model_name}, temp={llm_temperature}")
+
+        elif llm_provider == "openrouter":
+            if not llm_api_key: # Fallback to global OpenRouter key
+                llm_api_key = settings.OPENROUTER_API_KEY
+            if not llm_api_key:
+                logger.error(f"OpenRouter API key not found for client '{client_id}' and no global OPENROUTER_API_KEY set.")
+                raise ValueError(f"API key is required for provider 'openrouter'.")
+
+            llm_client = ChatOpenAI(
+                model_name=llm_model_name,
+                openai_api_key=llm_api_key,
+                openai_api_base="https://openrouter.ai/api/v1",
+                temperature=llm_temperature,
+                max_tokens=llm_max_tokens,
+            )
+            logger.debug(f"Using OpenRouter LLM client: model={llm_model_name}, temp={llm_temperature}")
+
+        elif llm_provider == "openai":
+            # Assuming you might add a direct OpenAI integration later
+            if not llm_api_key: # Fallback to a global OpenAI key if you add one to settings
+                                # e.g., settings.OPENAI_API_KEY (distinct from OPENROUTER_API_KEY)
+                # For now, let's assume it might be the same as OpenRouter key if not specified, or error.
+                # This part would need a dedicated settings.OPENAI_API_KEY if used directly.
+                llm_api_key = settings.OPENROUTER_API_KEY # Placeholder, adjust if you have a separate OpenAI key
+                logger.warning("OpenAI provider selected, but no specific client API key. Falling back to OPENROUTER_API_KEY as placeholder for direct OpenAI.")
+
+            if not llm_api_key:
+                logger.error(f"OpenAI API key not found for client '{client_id}'.")
+                raise ValueError(f"API key is required for provider 'openai'.")
+
+            llm_client = ChatOpenAI(
+                model_name=llm_model_name,
+                openai_api_key=llm_api_key,
+                # openai_api_base is not set, so it uses default OpenAI
+                temperature=llm_temperature,
+                max_tokens=llm_max_tokens,
+            )
+            logger.debug(f"Using OpenAI LLM client: model={llm_model_name}, temp={llm_temperature}")
+        else:
+            logger.error(f"Unsupported LLM provider: {llm_provider} for client_id: {client_id}")
+            raise ValueError(f"Unsupported LLM provider: {llm_provider}")
+
+        if llm_client is None: # Should have been caught by provider check, but as a safeguard
+            logger.error(f"LLM client could not be initialized for provider: {llm_provider}")
+            raise ValueError("LLM client initialization failed.")
 
         chain = prompt | llm_client | self.output_parser
 
