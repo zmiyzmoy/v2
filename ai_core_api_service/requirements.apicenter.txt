@@ -15,7 +15,7 @@ pyyaml==6.0.1 # Если будете грузить YAML конфиги
 
 # For Admin Panel & DB ODM
 beanie==1.26.0
-fastapi-admin==0.8.2
+fastapi-admin==1.0.4
 passlib[bcrypt]==1.7.4 # For hashing secrets
 
 # For Google Gemini support
