@@ -21,6 +21,9 @@ class LLMJsonOutput(BaseModel):
     entities: Optional[Dict[str, Any]] = Field(None, description="A JSON object of extracted entities as key-value pairs (e.g., {\"service\": \"маникюр\", \"date\": \"tomorrow\"}). If no entities, set to null.")
     actions_for_n8n: List[ActionForN8N] = Field(default_factory=list, description="List of action objects for the n8n system. Each action: {\"type\": \"action_name\", \"params\": {...}}. If no actions are needed, return an empty list [].")
 
+    class Config: # ADDED THIS CONFIG
+        arbitrary_types_allowed = True
+
 class LLMProcessor:
     def __init__(self, db_instance: Any, i18n_loader: I18nLoader):
         if db_instance is None:
