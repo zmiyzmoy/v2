@@ -15,8 +15,11 @@ pyyaml==6.0.1 # Если будете грузить YAML конфиги
 
 # For Admin Panel & DB ODM
 beanie==1.26.0
-fastapi-admin==1.0.4
+fastapi-admin==1.0.4 # Updated version based on pip error
 passlib[bcrypt]==1.7.4 # For hashing secrets
 
 # For Google Gemini support
 langchain-google-genai==1.0.3
+
+# For Redis support (e.g., for fastapi-admin sessions/cache)
+aioredis==2.0.1

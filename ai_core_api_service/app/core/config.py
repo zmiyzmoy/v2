@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     ADMIN_PASSWORD: str = "supersecretadminpassword" # CHANGE THIS IN PRODUCTION!
     ADMIN_APP_SECRET_KEY: str = "a_very_strong_random_secret_for_admin_sessions_please_change_me" # CHANGE THIS IN PRODUCTION!
 
+    # Redis Configuration (for FastAPI Admin sessions/cache)
+    REDIS_HOST: str = "redis" # Default to service name in Docker Compose
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: Optional[str] = None
+    REDIS_DB_ADMIN: int = 0 # Specific DB for admin panel sessions/cache
+
     class Config:
         env_file = ENV_FILE_PATH
         env_file_encoding = 'utf-8'

@@ -11,9 +11,9 @@ from app.core.i18n import I18nLoader
 from beanie import init_beanie
 from app.models.client_models import ClientConfiguration
 # For FastAPI Admin
-from fastapi_admin.app import app as fastapi_admin_app # Renamed to avoid conflict
-from fastapi_admin.resources import Model as ModelResource # Changed from Resource to ModelResource for clarity with Beanie
-from fastapi_admin.widgets import displays, inputs
+from fastapi_admin.app import app as fastapi_admin_app
+from fastapi_admin.resources import Model as ModelResource
+from fastapi_admin.widgets import displays # inputs might not be needed for basic display
 from fastapi_admin.engine import Engine
 from motor.motor_asyncio import AsyncIOMotorClient # Needed for Admin engine
 from app.core.security import verify_admin_credentials # For protecting the admin mount
@@ -146,16 +146,34 @@ async def init_admin_app(fastapi_app_instance: FastAPI, motor_client: AsyncIOMot
     logger.info(f"FastAPI Admin panel mounted at /admin-panel and configured.")
 
 
-# Modify lifespan to initialize admin_app
+# Modify lifespan to initialize admin_app and Redis
+import aioredis # ADDED: For Redis connection
+
 @asynccontextmanager
 async def lifespan(app_param: FastAPI): # Renamed app to app_param to avoid conflict
     # Код, выполняемый при старте приложения
     setup_logging_api() # Настройка логирования Loguru
     logger.info(f"Starting {settings.PROJECT_NAME_API} v{settings.API_VERSION}...")
 
+    # Initialize Redis
+    redis_url = f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB_ADMIN}"
+    if settings.REDIS_PASSWORD:
+        redis_url = f"redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB_ADMIN}"
+
+    try:
+        app_param.state.redis = await aioredis.from_url(redis_url, encoding="utf8", decode_responses=True)
+        # Test connection
+        await app_param.state.redis.ping()
+        logger.info(f"Successfully connected to Redis at {settings.REDIS_HOST}:{settings.REDIS_PORT}, DB: {settings.REDIS_DB_ADMIN}")
+    except Exception as e:
+        logger.error(f"Failed to connect to Redis: {e}", exc_info=True)
+        app_param.state.redis = None # Ensure state.redis exists but is None if connection fails
+        # Depending on how critical Redis is, you might want to raise an exception here to stop app startup.
+        # For fastapi-admin, it might degrade gracefully or fail if it strictly needs Redis for sessions.
+
     await connect_to_mongo() # Подключение к MongoDB
 
-    mongo_client = get_mongo_client() # Get the connected Motor client
+    mongo_client = get_mongo_client()
     db_instance_for_beanie = get_database()
 
     if mongo_client and db_instance_for_beanie:
@@ -166,10 +184,21 @@ async def lifespan(app_param: FastAPI): # Renamed app to app_param to avoid conf
         logger.info("Beanie ODM initialized successfully.")
 
         # Initialize FastAPI Admin here, as mongo_client is now available
+        # Pass redis client to fastapi_admin_app if it supports it directly,
+        # or ensure SessionMiddleware is configured to use it if that's the mechanism.
+        # For fastapi-admin 1.0.4, it primarily uses Starlette's SessionMiddleware.
+        # If we want Redis-backed sessions, we'd replace/configure that middleware.
+        # For now, just making redis available in app.state for potential use.
+        # The `secret_key` in `fastapi_admin_app.configure` enables cookie-based sessions by default.
+        # If `fastapi-admin` has specific Redis integration for cache/sessions beyond Starlette's SessionMiddleware,
+        # its documentation for v1.0.4 would need to be consulted for the exact parameters in .configure()
+
+        # The existing init_admin_app does not explicitly take a redis client for fastapi-admin 1.0.4's structure.
+        # It relies on the SessionMiddleware configured by secret_key.
+        # If Redis is strictly for fastapi-admin's internal cache (not sessions), it might look for app.state.redis.
         await init_admin_app(app_param, mongo_client)
     else:
         logger.critical("Failed to get MongoDB client or database for Beanie/Admin initialization.")
-        # Potentially raise an error here
 
     app_param.state.i18n_loader = I18nLoader(
         locales_path=settings.I18N_PATH_API,
@@ -185,6 +214,9 @@ async def lifespan(app_param: FastAPI): # Renamed app to app_param to avoid conf
     yield
 
     logger.info(f"Shutting down {settings.PROJECT_NAME_API}...")
+    if hasattr(app_param.state, 'redis') and app_param.state.redis:
+        await app_param.state.redis.close()
+        logger.info("Redis connection closed.")
     await close_mongo_connection()
     logger.info(f"{settings.PROJECT_NAME_API} has been shut down.")
 
@@ -192,9 +224,9 @@ async def lifespan(app_param: FastAPI): # Renamed app to app_param to avoid conf
 app = FastAPI(
     title=settings.PROJECT_NAME_API,
     version=settings.API_VERSION,
-    lifespan=lifespan # Use the modified lifespan
+    lifespan=lifespan
 )
-# Note: Routers and admin app are now included/mounted inside the lifespan or init_admin_app
+# Routers and admin app are included/mounted inside the lifespan (init_admin_app) or globally for API routers
 
 # Эндпоинт для проверки состояния
 @app.get("/health", summary="Check Application Health", tags=["Health"])

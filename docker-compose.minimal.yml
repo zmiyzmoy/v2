@@ -61,13 +61,28 @@ services:
 
     depends_on:
       - mongodb
+      - redis # ADDED: ai_core_api depends on redis
     networks:
       - app_network_minimal
     ports:
       - "8000:8000"
 
+  redis: # ADDED: Redis service
+    image: redis:alpine
+    container_name: mvp_redis_minimal
+    restart: unless-stopped
+    networks:
+      - app_network_minimal
+    # Если Redis требует пароль, его нужно будет добавить сюда и в настройки ai_core_api
+    # environment:
+    #   - REDIS_ARGS=--requirepass your_redis_password
+    ports: # Опционально: пробросить порт Redis наружу для отладки
+      - "6379:6379"
+
 volumes:
   mongo_data_minimal:
+  # redis_data_minimal: # Опционально: если нужна персистентность данных Redis
+  #   driver: local
 
 networks:
   app_network_minimal:
