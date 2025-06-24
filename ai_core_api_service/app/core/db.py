@@ -9,7 +9,7 @@ mongo_database_instance: Optional[Any] = None # MongoDB Database object from Mot
 
 async def connect_to_mongo():
     global mongo_client_instance, mongo_database_instance
-    if mongo_client_instance is not None and mongo_database_instance is not None: # ИЗМЕНЕНИЕ ЗДЕСЬ (хотя здесь было правильно)
+    if mongo_client_instance is not None and mongo_database_instance is not None:
         try:
             await mongo_client_instance.admin.command('ping')
             logger.debug("MongoDB connection already active and verified.")
@@ -38,7 +38,7 @@ async def connect_to_mongo():
 
 async def close_mongo_connection():
     global mongo_client_instance, mongo_database_instance
-    if mongo_client_instance is not None: # ИЗМЕНЕНИЕ ЗДЕСЬ
+    if mongo_client_instance is not None:
         logger.info("Closing MongoDB connection.")
         mongo_client_instance.close()
         mongo_client_instance = None
@@ -49,9 +49,14 @@ def get_database() -> Optional[Any]: # Возвращает объект баз�
         logger.error("MongoDB instance (database) is not available. Connection might have failed or not been initialized.")
     return mongo_database_instance
 
-async def create_indexes(db: Any): # Принимает объект базы данных Motor
+def get_mongo_client() -> Optional[AsyncIOMotorClient]: # Returns the Motor client instance
+    if mongo_client_instance is None:
+        logger.error("MongoDB client instance is not available. Connection might have failed or not been initialized.")
+    return mongo_client_instance
+
+async def create_indexes(db: Any): # Accepts a Motor database object
     """Создает необходимые индексы, если они еще не существуют."""
-    if db is None: # ИЗМЕНЕНИЕ ЗДЕСЬ
+    if db is None:
         logger.error("Cannot create indexes, database instance is None.")
         return
 
@@ -73,7 +78,7 @@ async def create_indexes(db: Any): # Принимает объект базы д
 
 async def save_dialog_entry(db: Any, entry_data: dict):
     """Сохраняет одну запись диалога в указанную коллекцию."""
-    if db is None: # ИЗМЕНЕНИЕ ЗДЕСЬ
+    if db is None:
         logger.error("Cannot save dialog entry, database instance is None.")
         return None
     try:
@@ -87,7 +92,7 @@ async def save_dialog_entry(db: Any, entry_data: dict):
 
 async def get_dialog_history(db: Any, client_id: str, user_id: str, limit: int) -> list:
     """Получает последние 'limit' сообщений для данного клиента и пользователя."""
-    if db is None: # ИЗМЕНЕНИЕ ЗДЕСЬ
+    if db is None:
         logger.error("Cannot get dialog history, database instance is None.")
         return []
     try:

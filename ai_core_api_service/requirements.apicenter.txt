@@ -12,3 +12,8 @@ pydantic-settings==2.2.1
 httpx==0.27.0 # Уже есть в langchain, но для явности
 pyyaml==6.0.1 # Если будете грузить YAML конфиги
 # tiktoken # Может понадобиться для langchain-openai для токенизации
+
+# For Admin Panel & DB ODM
+beanie==1.26.0
+fastapi-admin==0.8.2
+passlib[bcrypt]==1.7.4 # For hashing secrets

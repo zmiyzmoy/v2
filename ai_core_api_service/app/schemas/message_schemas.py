@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field, HttpUrl
-from typing import List, Optional, Dict, Any # Убедитесь, что HttpUrl импортирован, если будете его использовать для URL
+from pydantic import BaseModel, Field # HttpUrl removed as it's not used
+from typing import List, Optional, Dict, Any
 
 # --- Модели для запроса к /process_message ---
 class ConversationHistoryItem(BaseModel):

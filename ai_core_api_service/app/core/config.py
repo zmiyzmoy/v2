@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     LLM_MAX_TOKENS: int = 100 # Увеличил немного для более полных ответов
     HISTORY_MAX_MESSAGES: int = 10
 
+    # Admin User (for basic auth on admin endpoints)
+    # These should ideally be set via environment variables, especially in production
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: str = "supersecretadminpassword" # CHANGE THIS IN PRODUCTION!
+    ADMIN_APP_SECRET_KEY: str = "a_very_strong_random_secret_for_admin_sessions_please_change_me" # CHANGE THIS IN PRODUCTION!
+
     class Config:
         env_file = ENV_FILE_PATH
         env_file_encoding = 'utf-8'
@@ -75,3 +81,88 @@ def setup_logging_api():
         colorize=True 
     )
     # logger.info(f"API Service logging configured. Level: {settings.LOG_LEVEL.upper()}") # Вызовется в lifespan
+
+# Now loads from DB if client_id is provided, otherwise uses MVP defaults.
+async def load_client_config(client_id: Optional[str], request_lang: Optional[str]) -> dict:
+    """
+    Loads client-specific configuration from the database if client_id is provided.
+    Falls back to MVP default settings if client_id is None, client not found, or client is inactive.
+    Prioritizes request_lang for the 'default_lang' field if provided.
+    """
+    # Import here to avoid circular dependencies at module load time
+    # and ensure Beanie models are initialized.
+    from app.models.client_models import ClientConfiguration
+
+    # Prepare MVP default config first
+    # This will be used as a fallback or base.
+    mvp_config = {
+        "client_id": settings.MVP_CLIENT_ID,
+        "name": settings.MVP_CLIENT_NAME,
+        "persona": settings.MVP_CLIENT_PERSONA,
+        "tone": settings.MVP_CLIENT_TONE,
+        "business_type": settings.MVP_BUSINESS_TYPE,
+        "default_lang": request_lang or settings.DEFAULT_LANG_API, # Prioritize request_lang for MVP too
+        "llm_model": settings.DEFAULT_LLM_MODEL, # This comes from llm_config in DB model
+        "history_max_messages": settings.HISTORY_MAX_MESSAGES,
+        # LLM specific settings like api_key, temperature, max_tokens will come from llm_config
+        # For MVP, they are implicitly defined by global settings if not overridden
+        "llm_config_provider": "openrouter", # Default provider for MVP
+        "llm_config_api_key": settings.OPENROUTER_API_KEY, # Default API key for MVP
+        "llm_config_temperature": settings.LLM_TEMPERATURE,
+        "llm_config_max_tokens": settings.LLM_MAX_TOKENS,
+        "llm_config_custom_prompt_prefix": None,
+    }
+
+    if not client_id:
+        logger.warning("No client_id provided, using MVP default configuration.")
+        # Ensure client_id in the returned config reflects the one being used (MVP's)
+        mvp_config["client_id"] = settings.MVP_CLIENT_ID
+        return mvp_config
+
+    try:
+        client_doc = await ClientConfiguration.find_one(
+            ClientConfiguration.client_id == client_id,
+            ClientConfiguration.is_active == True
+        )
+
+        if client_doc:
+            logger.info(f"Loaded configuration for client_id: {client_id}")
+            # Construct the config dictionary from the Beanie document
+            # Ensure all expected keys by LLMProcessor are present.
+
+            # Prioritize request_lang if provided by user, else use client's default_lang
+            effective_lang = request_lang or client_doc.default_lang
+
+            loaded_config = {
+                "client_id": client_doc.client_id,
+                "name": client_doc.client_name,
+                "persona": client_doc.persona,
+                "tone": client_doc.tone,
+                "business_type": client_doc.business_type,
+                "default_lang": effective_lang,
+                "history_max_messages": client_doc.history_max_messages,
+
+                # LLM Config fields - directly from client_doc.llm_config Pydantic model
+                "llm_model": client_doc.llm_config.model_name,
+                "llm_config_provider": client_doc.llm_config.provider,
+                "llm_config_api_key": client_doc.llm_config.api_key, # This will be used by LLMProcessor
+                "llm_config_temperature": client_doc.llm_config.temperature,
+                "llm_config_max_tokens": client_doc.llm_config.max_tokens,
+                "llm_config_custom_prompt_prefix": client_doc.llm_config.custom_prompt_prefix,
+            }
+            return loaded_config
+        else:
+            logger.warning(f"Client configuration not found or inactive for client_id: {client_id}. Using MVP default configuration.")
+            # Ensure client_id in the returned config reflects the one being used (MVP's)
+            mvp_config["client_id"] = settings.MVP_CLIENT_ID # Fallback to MVP client_id
+            if client_id: # If a specific client_id was requested but not found/inactive
+                mvp_config["original_request_client_id"] = client_id # Keep track of what was asked
+            return mvp_config
+
+    except Exception as e:
+        logger.error(f"Error loading client configuration for client_id '{client_id}': {e}. Using MVP default configuration.", exc_info=True)
+        # Ensure client_id in the returned config reflects the one being used (MVP's)
+        mvp_config["client_id"] = settings.MVP_CLIENT_ID
+        if client_id:
+             mvp_config["original_request_client_id"] = client_id
+        return mvp_config

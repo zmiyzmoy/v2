@@ -1,4 +1,4 @@
-import traceback # <--- ДОБАВЛЕН ЭТОТ ИМПОРТ
+import traceback
 from fastapi import APIRouter, HTTPException, Depends, Request
 from loguru import logger
 from typing import List, Optional, Dict, Any
@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any
 from app.schemas.message_schemas import ProcessMessageRequest, ProcessMessageResponse, AICoreResponseData, ErrorDetails, DebugInfo
 from app.core.llm_processor import LLMProcessor
 from app.core.i18n import I18nLoader
-from app.core.config import settings
+from app.core.config import settings, load_client_config
 from app.core.db import get_database # Для передачи в LLMProcessor
 
 router = APIRouter()
@@ -37,20 +37,14 @@ async def process_user_message(
     logger.debug(f"Incoming request payload: {request_data.model_dump_json(indent=2)}")
 
     try:
-        # Конфигурация клиента для MVP (в будущем будет грузиться из БД по request_data.client_id)
-        client_config_mvp = {
-            "client_id": request_data.client_id or settings.MVP_CLIENT_ID,
-            "name": settings.MVP_CLIENT_NAME,
-            "persona": settings.MVP_CLIENT_PERSONA,
-            "tone": settings.MVP_CLIENT_TONE,
-            "business_type": settings.MVP_BUSINESS_TYPE,
-            "default_lang": request_data.language_preference or settings.DEFAULT_LANG_API,
-            "llm_model": settings.DEFAULT_LLM_MODEL,
-            "history_max_messages": settings.HISTORY_MAX_MESSAGES
-        }
-        logger.debug(f"Using client config for processing: {client_config_mvp}")
+        # Загрузка конфигурации клиента
+        client_config = await load_client_config( # ADDED await
+            client_id=request_data.client_id,
+            request_lang=request_data.language_preference
+        )
+        logger.debug(f"Using client config for processing: {client_config}")
 
-        # Опциональный лог перед вызовом LLMProcessor (можете раскомментировать для детальной отладки)
+        # Optional: Detailed debug log before calling LLMProcessor (uncomment if needed for deep debugging)
         # logger.debug(
         #     f"Data for LLMProcessor -- "
         #     f"User ID: {request_data.user_id}, "
@@ -62,12 +56,12 @@ async def process_user_message(
         # )
 
         llm_processed_data = await llm_processor.process_with_llm_langchain(
-            client_config=client_config_mvp,
+            client_config=client_config,
             user_id=request_data.user_id,
             platform=request_data.platform,
             current_user_message=request_data.text,
             conversation_history=request_data.conversation_history or [],
-            language_preference=request_data.language_preference, # Передаем для логики внутри процессора
+            language_preference=request_data.language_preference, # Passed for logic within LLMProcessor
             session_id=request_data.session_id,
             message_metadata=request_data.message_metadata
         )
@@ -85,7 +79,8 @@ async def process_user_message(
 
         response_data = AICoreResponseData(
             response_text=llm_processed_data.get("response_text", "No response generated."),
-            language_detected=llm_processed_data.get("language_detected", client_config_mvp["default_lang"]),
+            # Use language_detected from LLM, fallback to config's default_lang if LLM doesn't provide it
+            language_detected=llm_processed_data.get("language_detected") or client_config["default_lang"],
             intent=llm_processed_data.get("intent"),
             entities=llm_processed_data.get("entities"),
             actions_for_n8n=llm_processed_data.get("actions_for_n8n", [])
@@ -103,6 +98,6 @@ async def process_user_message(
     except HTTPException: # Перехватываем HTTPException, чтобы не попасть в общий Exception ниже
         raise
     except Exception as e:
-        tb_str = traceback.format_exc() # <--- ПОЛУЧЕНИЕ ПОЛНОГО TRACEBACK
-        logger.critical(f"Critical unhandled error in /process_message for session {request_data.session_id}: {e}\nTRACEBACK:\n{tb_str}") # <--- ВЫВОД TRACEBACK В ЛОГ
+        tb_str = traceback.format_exc() # Get full traceback
+        logger.critical(f"Critical unhandled error in /process_message for session {request_data.session_id}: {e}\nTRACEBACK:\n{tb_str}") # Log full traceback
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

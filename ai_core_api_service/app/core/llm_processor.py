@@ -1,6 +1,7 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage as LangchainSystemMessage
 from loguru import logger
 from typing import List, Dict, Any, Optional
@@ -9,22 +10,31 @@ from datetime import datetime, timezone
 from app.core.config import settings
 from app.core.i18n import I18nLoader
 from app.core.db import save_dialog_entry, get_dialog_history
+from app.schemas.message_schemas import ActionForN8N
+
+# Pydantic model defining the expected JSON structure from the LLM
+class LLMJsonOutput(BaseModel):
+    response_text: str = Field(description="Your natural language response to the user.")
+    language_detected: str = Field(description="ISO 639-1 code of the language you detected the user is speaking (e.g., 'ru', 'en', 'az').")
+    intent: Optional[str] = Field(None, description="A brief label for the user's intent (e.g., 'greeting', 'product_inquiry', 'booking_request', 'complaint', 'other'). If unsure, set to null.")
+    entities: Optional[Dict[str, Any]] = Field(None, description="A JSON object of extracted entities as key-value pairs (e.g., {\"service\": \"маникюр\", \"date\": \"tomorrow\"}). If no entities, set to null.")
+    actions_for_n8n: List[ActionForN8N] = Field(default_factory=list, description="List of action objects for the n8n system. Each action: {\"type\": \"action_name\", \"params\": {...}}. If no actions are needed, return an empty list [].")
 
 class LLMProcessor:
     def __init__(self, db_instance: Any, i18n_loader: I18nLoader):
+        if db_instance is None:
+            # This error will be caught by FastAPI's dependency injection system
+            # and result in a 500 Internal Server Error response if
+            # get_database() returns None.
+            logger.error("LLMProcessor initialized with no database instance. Database is not available.")
+            raise ValueError("Database instance is required for LLMProcessor.")
+
         self.db = db_instance
         self.i18n = i18n_loader
-
-        self.llm = ChatOpenAI(
-            model_name=settings.DEFAULT_LLM_MODEL,
-            openai_api_key=settings.OPENROUTER_API_KEY,
-            openai_api_base="https://openrouter.ai/api/v1",
-            temperature=settings.LLM_TEMPERATURE,
-            max_tokens=settings.LLM_MAX_TOKENS,
-        )
-        logger.info(f"LLMProcessor initialized with model: {settings.DEFAULT_LLM_MODEL} via OpenRouter.")
-        if settings.LANGCHAIN_TRACING_V2 == "true":
-             logger.info(f"LangSmith tracing should be active for project '{settings.LANGCHAIN_PROJECT}'.")
+        self.output_parser = PydanticOutputParser(pydantic_object=LLMJsonOutput)
+        # LLM client will be initialized per-request in process_with_llm_langchain
+        # using client-specific configurations.
+        logger.info("LLMProcessor initialized. LLM client will be configured per request.")
 
 
     async def _save_message_to_history(
@@ -34,10 +44,7 @@ class LLMProcessor:
         message_metadata: Optional[Dict[str, Any]] = None,
         llm_full_response: Optional[Dict[str, Any]] = None
     ):
-        if self.db is None: # ИЗМЕНЕНИЕ ЗДЕСЬ
-            logger.warning("Database instance not available. Skipping history save.")
-            return
-
+        # self.db is now guaranteed to be non-None due to the check in __init__
         content_to_save = content
         if not content:
              if role == "assistant" and llm_full_response and isinstance(llm_full_response.get("response_text"), str):
@@ -67,30 +74,36 @@ class LLMProcessor:
     def _construct_system_prompt_content(self, client_config: Dict[str, Any], language: str) -> str:
         system_template = """Ты - AI-ассистент для бизнеса "{business_name}" (тип: {business_type}).
 Твоя задача: внимательно проанализировать текущий запрос пользователя и историю диалога.
-1. Понять намерение пользователя (например, запрос информации, бронирование, жалоба).
-2. Извлечь ключевые сущности из запроса (например, название услуги, дата, время, имя).
-3. Определить, какие действия должна предпринять система n8n (если нужны).
-4. Сгенерировать максимально полезный, дружелюбный и вовлекающий ответ пользователю.
-Ты должен общаться в тоне '{tone}' и от лица '{persona}'.
-Всегда отвечай на языке, который ты определил как язык пользователя. Если сомневаешься, используй '{language_fallback}'.
+Основные цели:
+1. Определить намерение (intent) пользователя.
+2. Извлечь ключевые сущности (entities) из запроса.
+3. Определить необходимые действия для системы n8n (actions_for_n8n).
+4. Сгенерировать полезный, дружелюбный и вовлекающий ответ (response_text) пользователю.
 
-Твой ответ ДОЛЖЕН БЫТЬ в формате JSON объекта со следующими обязательными ключами:
-"response_text": (string) Твой естественный ответ пользователю.
-"language_detected": (string) ISO 639-1 код определенного тобой языка пользователя (например, "ru", "en", "az").
-"intent": (string|null) Краткая метка намерения пользователя (например, "greeting", "product_inquiry", "booking_request", "complaint", "other"). Если не уверен, ставь null.
-"entities": (object|null) JSON объект извлеченных сущностей в формате ключ-значение (например, {{"service": "маникюр", "date": "завтра"}}). Если нет сущностей, ставь null.
-"actions_for_n8n": (array) Список объектов действий для системы n8n. Каждое действие: {{"type": "имя_действия", "params": {{...}}}}. Если действий не требуется, верни пустой массив [].
+Общие инструкции:
+- Общайся в тоне '{tone}' и от лица '{persona}'.
+- Всегда отвечай на языке, который ты определил как язык пользователя. Если сомневаешься, используй '{language_fallback}'.
+- Твой ответ ДОЛЖЕН БЫТЬ в формате JSON, соответствующем следующей схеме:
+{json_schema}
 
-Пример actions_for_n8n:
-- Запрос информации о ценах: [{{"type": "get_price_list", "params": {{"service_category": "haircut"}}}}]
-- Запись на услугу: [{{"type": "create_booking_lead", "params": {{"service": "маникюр", "client_name": "Анна", "phone": "...", "datetime": "2025-05-20T14:00:00"}}}}]
-- Перевод на оператора: [{{"type": "escalate_to_human", "params": {{"reason": "сложный вопрос"}}}}]
+Важно:
+- "response_text" должен быть твоим естественным ответом пользователю.
+- "language_detected" должен быть ISO 639-1 кодом языка пользователя.
+- "intent" должен быть краткой меткой намерения (null, если не уверен).
+- "entities" должен быть JSON объектом (null, если нет).
+- "actions_for_n8n" должен быть списком объектов действий (пустой список [], если действий не требуется).
 
-Убедись, что JSON валиден.
+Примеры для "actions_for_n8n":
+- Запрос информации о ценах: `[{{\"type\": \"get_price_list\", \"params\": {{\"service_category\": \"haircut\"}}}}]`
+- Запись на услугу: `[{{\"type\": \"create_booking_lead\", \"params\": {{\"service\": \"маникюр\", \"client_name\": \"Анна\", \"phone\": \"...\", \"datetime\": \"2025-05-20T14:00:00\"}}}}]`
+- Перевод на оператора: `[{{\"type\": \"escalate_to_human\", \"params\": {{\"reason\": \"сложный вопрос\"}}}}]`
+
+Убедись, что JSON строго валиден и соответствует предоставленной схеме.
 """
         return system_template.format(
             business_name=client_config.get('name', settings.MVP_CLIENT_NAME),
             business_type=client_config.get('business_type', settings.MVP_BUSINESS_TYPE),
+            json_schema=self.output_parser.get_format_instructions(),
             tone=client_config.get('tone', settings.MVP_CLIENT_TONE),
             persona=client_config.get('persona', settings.MVP_CLIENT_PERSONA),
             language_fallback=language
@@ -129,7 +142,8 @@ class LLMProcessor:
 
         effective_lang = language_preference or client_config.get("default_lang") or settings.DEFAULT_LANG_API
 
-        if not conversation_history and self.db is not None: # ИЗМЕНЕНИЕ ЗДЕСЬ
+        # self.db is now guaranteed to be non-None due to the check in __init__
+        if not conversation_history:
             logger.debug(f"Conversation history from n8n is empty for {user_id}. Fetching from DB...")
             history_from_db_docs = await get_dialog_history(self.db, client_id, user_id, settings.HISTORY_MAX_MESSAGES)
             formatted_lc_history = self._format_history_for_lc(history_from_db_docs)
@@ -144,50 +158,61 @@ class LLMProcessor:
         prompt = ChatPromptTemplate.from_messages([
             LangchainSystemMessage(content=system_prompt_str),
             MessagesPlaceholder(variable_name="chat_history", optional=True),
-            HumanMessage(content="{input}")
+            HumanMessage(content="{input}"),
+            # The PydanticOutputParser will add its own formatting instructions if not already in the prompt
         ])
 
-        output_parser = JsonOutputParser()
-        chain = prompt | self.llm | output_parser
+        # Initialize LLM client with client-specific configuration
+        # Determine API base and key based on provider
+        # For now, hardcoding OpenRouter base. This could be part of llm_config_provider logic.
+        # A more robust solution would map provider names to base URLs.
+        openai_api_base = "https://openrouter.ai/api/v1"
+        if client_config.get("llm_config_provider") == "openai":
+            openai_api_base = None # Use default OpenAI base
+
+        llm_client = ChatOpenAI(
+            model_name=client_config.get("llm_model", settings.DEFAULT_LLM_MODEL),
+            openai_api_key=client_config.get("llm_config_api_key", settings.OPENROUTER_API_KEY), # Fallback to global default if not in client_config
+            openai_api_base=openai_api_base,
+            temperature=client_config.get("llm_config_temperature", settings.LLM_TEMPERATURE),
+            max_tokens=client_config.get("llm_config_max_tokens", settings.LLM_MAX_TOKENS),
+        )
+        logger.debug(f"LLM client configured for request: model={llm_client.model_name}, temp={llm_client.temperature}, provider={client_config.get('llm_config_provider')}")
+
+        chain = prompt | llm_client | self.output_parser
 
         final_response_payload = {}
         start_time = datetime.now()
 
         try:
             logger.debug(f"Invoking LLM for user '{user_id}', session '{session_id}'. History length for LLM: {len(formatted_lc_history)}")
-            llm_result_dict = await chain.ainvoke({
+            llm_result_obj: LLMJsonOutput = await chain.ainvoke({
                 "chat_history": formatted_lc_history,
                 "input": current_user_message
             })
 
-            if not isinstance(llm_result_dict, dict) or "response_text" not in llm_result_dict:
-                logger.error(f"LLM response is not a valid dict or missing 'response_text'. Response: {llm_result_dict}")
-                if isinstance(llm_result_dict, str):
-                    try:
-                        llm_result_dict = output_parser.parse(llm_result_dict)
-                        if "response_text" not in llm_result_dict: raise ValueError("Still no response_text")
-                    except Exception as parse_err:
-                        logger.error(f"Could not re-parse LLM string response: {parse_err}")
-                        raise ValueError("Invalid LLM response format after re-parse attempt")
-                else:
-                  raise ValueError("Invalid LLM response format")
-
-
+            # Convert Pydantic model to dict for existing processing logic
+            # Access attributes directly from the llm_result_obj
             final_response_payload = {
-                "response_text": llm_result_dict.get("response_text", self.i18n.get("llm_empty_response", effective_lang)),
-                "language_detected": llm_result_dict.get("language_detected", effective_lang),
-                "intent": llm_result_dict.get("intent"),
-                "entities": llm_result_dict.get("entities", {}),
-                "actions_for_n8n": llm_result_dict.get("actions_for_n8n", [])
+                "response_text": llm_result_obj.response_text if llm_result_obj.response_text else self.i18n.get("llm_empty_response", effective_lang),
+                "language_detected": llm_result_obj.language_detected if llm_result_obj.language_detected else effective_lang,
+                "intent": llm_result_obj.intent,
+                "entities": llm_result_obj.entities if llm_result_obj.entities is not None else {}, # Ensure entities is a dict
+                "actions_for_n8n": [action.model_dump() for action in llm_result_obj.actions_for_n8n] # Convert ActionForN8N objects to dicts
             }
-            logger.info(f"LLM call successful for user '{user_id}'. Intent: {final_response_payload['intent']}")
+            logger.info(f"LLM call successful for user '{user_id}'. Intent: {final_response_payload.get('intent')}")
 
-        except Exception as e:
-            logger.error(f"Error during LLM chain for user '{user_id}', session '{session_id}': {e}", exc_info=True)
+        except Exception as e: # Includes PydanticOutputParser's OutputFixingParser errors if it tries to fix and fails, or direct parsing errors
+            logger.error(f"Error during LLM chain or parsing for user '{user_id}', session '{session_id}': {e}", exc_info=True)
             error_text = self.i18n.get("llm_invocation_error", effective_lang)
+            # Attempt to include more specific error information if available from Langchain's exceptions
+            error_message_detail = str(e)
+            if hasattr(e, 'llm_output'): # For some Langchain errors
+                error_message_detail = f"LLM Output: {e.llm_output}. Original Error: {str(e)}"
+
             final_response_payload = {
-                "error": "LLM_INVOCATION_FAILURE",
-                "error_message": str(e),
+                "error": "LLM_PROCESSING_ERROR", # More generic error code
+                "error_message": error_message_detail,
                 "response_text": error_text,
                 "language_detected": effective_lang,
                 "actions_for_n8n": []
@@ -197,7 +222,7 @@ class LLMProcessor:
         processing_time_ms = (end_time - start_time).total_seconds() * 1000
 
         final_response_payload["debug_info"] = {
-            "model_used": self.llm.model_name,
+            "model_used": llm_client.model_name, # Use the dynamically configured client's model name
             "processing_time_ms": round(processing_time_ms, 2)
         }
 
