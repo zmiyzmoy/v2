@@ -22,4 +22,5 @@ passlib[bcrypt]==1.7.4 # For hashing secrets
 langchain-google-genai==1.0.3
 
 # For Redis support (e.g., for fastapi-admin sessions/cache)
-aioredis==2.0.1
+# aioredis==2.0.1 # Deprecated due to Python 3.11+ TimeoutError conflict
+redis>=4.2.0 # Includes asyncio support, e.g., redis==5.0.4

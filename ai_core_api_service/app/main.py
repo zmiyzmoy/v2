@@ -147,7 +147,7 @@ async def init_admin_app(fastapi_app_instance: FastAPI, motor_client: AsyncIOMot
 
 
 # Modify lifespan to initialize admin_app and Redis
-import aioredis # ADDED: For Redis connection
+import redis.asyncio as redis # MODIFIED: Changed from aioredis to redis.asyncio
 
 @asynccontextmanager
 async def lifespan(app_param: FastAPI): # Renamed app to app_param to avoid conflict
@@ -157,19 +157,19 @@ async def lifespan(app_param: FastAPI): # Renamed app to app_param to avoid conf
 
     # Initialize Redis
     redis_url = f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB_ADMIN}"
-    if settings.REDIS_PASSWORD:
+    if settings.REDIS_PASSWORD: # Construct URL with password if provided
         redis_url = f"redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB_ADMIN}"
 
     try:
-        app_param.state.redis = await aioredis.from_url(redis_url, encoding="utf8", decode_responses=True)
+        # Use redis.asyncio.Redis.from_url
+        app_param.state.redis = redis.Redis.from_url(redis_url, encoding="utf8", decode_responses=True)
         # Test connection
         await app_param.state.redis.ping()
         logger.info(f"Successfully connected to Redis at {settings.REDIS_HOST}:{settings.REDIS_PORT}, DB: {settings.REDIS_DB_ADMIN}")
     except Exception as e:
         logger.error(f"Failed to connect to Redis: {e}", exc_info=True)
-        app_param.state.redis = None # Ensure state.redis exists but is None if connection fails
-        # Depending on how critical Redis is, you might want to raise an exception here to stop app startup.
-        # For fastapi-admin, it might degrade gracefully or fail if it strictly needs Redis for sessions.
+        app_param.state.redis = None
+        # Consider if app should fail to start if Redis connection is critical
 
     await connect_to_mongo() # Подключение к MongoDB
 
